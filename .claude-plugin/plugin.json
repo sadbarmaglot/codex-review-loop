@@ -1,0 +1,11 @@
+{
+  "name": "review-loop",
+  "version": "1.18.0",
+  "description": "Holds the turn until a second coding agent signs off on the diff. Reviewer runs as a CLI, so it bills the subscription, not the API.",
+  "author": {
+    "name": "sadbarmaglot"
+  },
+  "repository": "https://github.com/sadbarmaglot/codex-review-loop",
+  "license": "MIT",
+  "keywords": ["code-review", "hooks", "codex", "multi-agent"]
+}

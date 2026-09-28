@@ -1,0 +1,19 @@
+{
+  "name": "sadbarmaglot",
+  "description": "Personal Claude Code plugins",
+  "metadata": {
+    "description": "Personal Claude Code plugins"
+  },
+  "owner": {
+    "name": "sadbarmaglot"
+  },
+  "plugins": [
+    {
+      "name": "review-loop",
+      "source": "./",
+      "description": "Stop-hook gate: a second agent reviews the diff, findings come back as the reason Claude may not stop yet.",
+      "category": "code-quality",
+      "tags": ["code-review", "codex", "hooks"]
+    }
+  ]
+}
