@@ -81,6 +81,29 @@ The hook holds nothing open and runs nothing itself. After
 `REVIEW_LOOP_MAX_ROUNDS` unanswered asks it releases the turn with a notice
 rather than trapping you.
 
+## Checking a plan before writing it
+
+The gate guards the diff. Everything upstream of it — the sketch of what to
+change in code that already exists — is unguarded, and a plan that rebuilds
+something the repository has, or forgets a caller, costs a full implementation
+before anyone notices.
+
+```
+/review-loop:plan                       # the plan under discussion
+/review-loop:plan docs/some-plan.md     # or one written down already
+```
+
+It hands the plan and the repository to `codex exec --sandbox read-only` and
+prints the remarks: where the plan is wrong about the code that is there, not
+whether it is a good plan. Nothing gates a turn, nothing fires on its own, and
+a plan check does not satisfy the `Stop` hook — the code written afterwards
+still earns its own review.
+
+Reckon on a minute or two, not seconds. The reviewer reads a good deal of the
+repository, and the prompt has to forbid it running the tests: `--sandbox
+read-only` stops it writing, not executing, and the first run of this command
+spent four minutes in the suite before being told not to.
+
 ## Configuration
 
 Environment variables, all optional:
@@ -97,7 +120,7 @@ Environment variables, all optional:
 | `REVIEW_LOOP_FANOUT_REVIEWER` | `scripts/codex-worktree-review.sh` | What the fan-out runs copies of |
 | `REVIEW_LOOP_SETUP_CMD` | unset | Worktree adapter only: how to install dependencies in the throwaway checkout |
 | `REVIEW_LOOP_CODEX_SCOPE` | `--uncommitted` | Built-in adapter only: `--base <branch>` or `--commit <sha>` instead |
-| `REVIEW_LOOP_CODEX_FLAGS` | `-c model_reasoning_effort="medium"` | Flags passed to the Codex CLI. Without it a review inherits the effort from `~/.codex/config.toml`, which is chosen for writing code, not reviewing it — `high` there turned two-minute reviews into eight-minute ones |
+| `REVIEW_LOOP_CODEX_FLAGS` | `-c model_reasoning_effort="medium"` | Flags passed to the Codex CLI. Without it a review inherits the effort from `~/.codex/config.toml`, which is chosen for writing code, not reviewing it — `high` there turned two-minute reviews into eight-minute ones. Not read by `plan-review.sh`: that one reviews in your own checkout, so its sandbox is part of the command rather than a default to override |
 | `REVIEW_LOOP_SHARE_TRANSCRIPT` | unset | Any value adds the session's conversation — the talk, never the tool output — to what the reviewer reads |
 | `REVIEW_LOOP_MAX_TRANSCRIPT_BYTES` | `60000` | How much of that conversation, counted from the most recent end |
 | `REVIEW_LOOP_CODEX_MODEL` | unset | `-m` for the Codex CLI |
@@ -160,16 +183,22 @@ Any executable can be the reviewer:
 
 ## Status
 
-One hundred and sixty-eight assertions across four suites, all offline with stubbed reviewers,
-plus a manifest check:
+Five suites, all offline against stubbed reviewers, plus a manifest check.
+Each prints its own count:
 
 ```bash
-bash tests/test-gate.sh              # 48 - asking, budgets, test stage, every bail-out
-bash tests/test-run-review.sh        # 73 - results, hashes, snapshots, cancellation, failures
-bash tests/test-fanout.sh            # 17 - crashes, silence, partial output, stages
-bash tests/test-worktree-adapter.sh  # 30 - HEAD, index, reflog, branches, cleanup, paths
-bash tests/validate-manifests.sh     #      plugin, marketplace and hooks.json shape
+bash tests/test-gate.sh              # asking, budgets, test stage, every bail-out
+bash tests/test-run-review.sh        # results, hashes, snapshots, cancellation, failures
+bash tests/test-fanout.sh            # crashes, silence, partial output, stages
+bash tests/test-worktree-adapter.sh  # HEAD, index, reflog, branches, cleanup, paths
+bash tests/test-plan-review.sh       # the plan reaches the reviewer, sandbox, billing, cancellation
+bash tests/validate-manifests.sh     # plugin, marketplace and hooks.json shape
 ```
+
+The totals used to be written out here and were wrong three times in one day,
+always because the number was typed before the last assertion was added. A
+count that has to be maintained by hand is a claim about the suite that the
+suite does not check.
 
 Every one of them was watched failing against the code before the fix. A test
 written after the fact and never seen red is a test of nothing: two in this
