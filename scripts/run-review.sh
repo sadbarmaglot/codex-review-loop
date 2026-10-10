@@ -158,10 +158,21 @@ export REVIEW_LOOP_SNAPSHOT=$snapshot
 # A dirty submodule is recorded as its gitlink and nothing more, so its edits
 # are absent from the snapshot the reviewer reads. Say so rather than let the
 # review come back clean about code it never saw.
-embedded=$(embedded_repos "$repo_root" "$tree")
-if [ -n "$embedded" ]; then
+# Counted from the NUL stream, not from a formatted copy of it. Squashing the
+# records to newlines first and testing that for emptiness lost a path made
+# only of newlines: the terminator became one more newline and command
+# substitution took the lot, so the refusal never fired and the state was
+# filed as reviewed. The message still reads them on one line; the decision no
+# longer comes from it.
+embedded_count=0
+embedded_list=""
+while IFS= read -r -d '' nested; do
+  embedded_count=$((embedded_count + 1))
+  embedded_list="${embedded_list:+$embedded_list }$(printf '%s' "$nested" | tr '\n' '?')"
+done < <(embedded_repos "$repo_root" "$tree")
+if [ "$embedded_count" -gt 0 ]; then
   printf 'a directory here is a git repository of its own, so its contents are in no snapshot: %s\n' \
-    "$(printf '%s' "$embedded" | tr '\n' ' ')" >&2
+    "$embedded_list" >&2
   echo "commit it there, register it as a submodule, or ignore it." >&2
   exit 1
 fi
@@ -304,6 +315,30 @@ append_round() {
 }
 with_journal_lock append_round
 
+# How many reviews this uncommitted change has had. Keyed by the base
+# revision, so a commit starts the count over by giving it a new file - no
+# resetting to get wrong, and the old ones age out with everything else.
+#
+# The loop has no sense of diminishing returns. Left alone it will keep finding
+# smaller things for as long as it is fed, and the author keeps fixing them:
+# one change in this project reached a seventh round, by which point the
+# findings had moved from the design to a file extension. Past the threshold
+# the report carries a question to put to the user, because that is a decision
+# about the work and not a defect to fix.
+rounds_file=$results/rounds-$(repo_key "$repo_root")-${base:0:12}
+# Under the journal's lock, which is already held for the same kind of
+# read-modify-write a few lines above. Two reviews finishing together read the
+# same number and wrote the same increment, losing one of themselves and
+# putting the threshold off by a round.
+bump_round() {
+  round=$(cat "$rounds_file" 2>/dev/null)
+  case $round in ''|*[!0-9]*) round=0 ;; esac
+  round=$((round + 1))
+  printf '%s\n' "$round" >"$rounds_file"
+}
+with_journal_lock bump_round
+doubt_after=${REVIEW_LOOP_DOUBT_AFTER:-5}
+
 if [ -z "${report//[$' \t\n\r']/}" ]; then
   echo "the reviewer found nothing."
 else
@@ -318,6 +353,29 @@ own words and the user's language, not a paste - but nothing dropped and no two
 findings merged. Your own judgement comes after that, not mixed into it.
 
 EOF
+  if [ "$round" -ge "$doubt_after" ]; then
+    cat <<EOF
+This is review $round of the same uncommitted change, and nothing has been
+committed since the first. Answer this for yourself before acting on anything
+below - it is yours to settle, not a question to hand to the user.
+Are we going round in circles, and is there a shape that would make these
+findings stop arriving?
+
+Settle it concretely. What did the last few rounds actually change, and what
+did they leave alone? Have the findings been getting smaller while the design
+stood still? Do any of them keep returning in new wording - not the same
+defect twice, but the same direction?
+Would a different approach retire a whole family of them: less configurable,
+fewer moving parts, the boundary somewhere else?
+
+Then act on your answer. If the work is converging and what is below is worth
+fixing, fix it and carry on without ceremony. If it is not, change course or
+stop and commit what is already good, and say in one line what you concluded
+and why - the conclusion is worth the user's attention, the deliberation is
+not. What you must not do is keep fixing because a report arrived.
+
+EOF
+  fi
   printf '%s\n' "$report"
 fi
 

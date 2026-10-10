@@ -449,6 +449,10 @@ echo findings >"$sweep/aaa.out"; oldish "$sweep/aaa.out"
 echo findings >"$sweep/ccc.out"; old "$sweep/ccc.out"
 printf '%s\n' "$(date +%s)" >"$sweep/ddd.started.999999"
 printf '%s\n' "$(date +%s)" >"$sweep/eee.started.$$"
+# A decline is a decision, like the journal. Swept on age, the gate starts
+# asking again about a tree that never moved, which is the opposite of what
+# the command promises.
+echo "not mine to review" >"$sweep/fff.skipped"; old "$sweep/fff.skipped"
 
 ( . "$root/scripts/diff.sh"; prune_results "$sweep" )
 
@@ -463,6 +467,8 @@ check "a marker with a living owner is kept" "1" "$([ -f "$sweep/eee.started.$$"
 # Deleting every context took it out from under a review that had not read it.
 check "a context belonging to a running review is left alone" "1" \
   "$([ -f "$sweep/context-live-$$.md" ] && echo 1 || echo 0)"
+check "a decline outlives any sweep, as the journal does" "1" \
+  "$([ -f "$sweep/fff.skipped" ] && echo 1 || echo 0)"
 
 # --- two runs cannot lose each other's journal entries -----------------------
 # Past its size limit the journal is rewritten on every run, so an append
@@ -512,11 +518,46 @@ out=$( (cd "$nested" && "$runner" 2>"$work/err") ); rc=$?
 check "a repository inside the repository is refused" 1 "$rc"
 contains "and named" "vendor" "$(cat "$work/err")"
 
+# There is no assertion here for a repository named only by newline
+# characters, and the refusal is written so that one would pass. Three review
+# rounds went into this family - dirty ones, clean ones, then odd names - and
+# none of the seven repositories this plugin runs against has a gitlink or a
+# .gitmodules at all. The blunt refusal above earns its place because the
+# consequence is the bad kind: contents outside the snapshot, reviewed clean,
+# filed as done. Chasing its spelling does not.
+
 # --- outside a repository -------------------------------------------------------
 plain=$work/plain
 mkdir -p "$plain"
 (cd "$plain" && "$runner" >/dev/null 2>&1)
 check "outside a repository it declines" 1 "$?"
+
+# --- after enough rounds the loop asks whether it is circling ----------------
+# It has no sense of diminishing returns of its own: fed long enough it keeps
+# finding smaller things and the author keeps fixing them. One change in this
+# project reached a seventh round, by which point the findings had moved from
+# the design to a file extension. The question is for Claude to settle, not to
+# hand to the user, who wants the conclusion and not the deliberation.
+export FAKE_MODE=dirty REVIEW_LOOP_DOUBT_AFTER=3
+rm -f "$results"/rounds-*
+echo "round one" >>"$repo/src/a.py"; out=$(run)
+excludes "the first round raises no doubt" "going round in circles" "$out"
+echo "round two" >>"$repo/src/a.py"; out=$(run)
+excludes "nor the second" "going round in circles" "$out"
+echo "round three" >>"$repo/src/a.py"; out=$(run)
+contains "the third raises the question" "going round in circles" "$out"
+contains "and names the round it has reached" "review 3" "$out"
+contains "and asks for the alternative, not a formality" "retire a whole family" "$out"
+contains "and leaves it to Claude rather than the user" "not a question to hand to the user" "$out"
+contains "asking for the conclusion alone" "the deliberation is" "$out"
+
+# Keyed by the base revision, so a commit starts the count over by giving it a
+# new file. Nothing resets, which is one fewer thing to get wrong.
+git -C "$repo" add -A
+git -C "$repo" commit -qm "land what was good"
+echo "after the commit" >>"$repo/src/a.py"; out=$(run)
+excludes "committing starts the count again" "going round in circles" "$out"
+unset REVIEW_LOOP_DOUBT_AFTER
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

@@ -332,5 +332,70 @@ contains "asking is recorded" "asking for a background review" "$log"
 contains "the budget is recorded" "round budget spent" "$log"
 contains "a reviewed state is recorded" "has been reviewed" "$log"
 
+# There are no assertions here for a documents-only change. The gate had a
+# shortcut that released one unreviewed, and it is gone: five review rounds
+# each found its allow-list wrong in a new way - .txt, whole directories,
+# .mdx, file modes, this plugin's own commands/ and skills/, Copilot's
+# instruction files - and the next one was always waiting. The decline below
+# does the same job without guessing what a file means.
+#
+# run_gate_in, defined with the budget tests above, is still used by those.
+
+# --- a declined state is not asked about again -------------------------------
+# The gate decides by rules and cannot know what a turn was about. Once the
+# session has said so, repeating the question is noise - that is where most of
+# those 148 refusals came from.
+skip=$(dirname "$here")/scripts/skip-review.sh
+edit "a change nobody means to review"
+run_gate_in "$repo" sS pS1
+check "first it asks, as before" 2 "$rc"
+(cd "$repo" && "$skip" "belongs to another piece of work" >/dev/null 2>&1)
+run_gate_in "$repo" sS pS2
+check "once declined it stays quiet" 0 "$rc"
+sh=$(current_hash)
+check "and the marker is a decline, not a review" "1" \
+  "$([ -f "$results/$sh.skipped" ] && echo 1 || echo 0)"
+check "nothing claims the state was reviewed" "0" \
+  "$([ -f "$results/$sh.done" ] && echo 1 || echo 0)"
+contains "the reason is on the record" "another piece of work" \
+  "$(cat "$results/$sh.skipped")"
+
+edit "and now it moves again"
+run_gate_in "$repo" sS pS3
+check "a tree that changes after a decline is asked about" 2 "$rc"
+
+# A decline is refused where a review would be. The identity holds a dirty
+# nested repository as its gitlink alone, so a marker written now would keep
+# suppressing the question after further edits in there - a decline outliving
+# what it declined.
+deep=$repo/vendor/inner
+mkdir -p "$deep"
+git -C "$deep" init -q
+git -C "$deep" config user.email t@example.com
+git -C "$deep" config user.name test
+echo "code" >"$deep/lib.py"
+git -C "$deep" add -A
+git -C "$deep" commit -qm base
+git -C "$repo" add -A 2>/dev/null
+git -C "$repo" commit -qm "embed inner" >/dev/null 2>&1
+echo "uncommitted below" >>"$deep/lib.py"
+serr=$( (cd "$repo" && "$skip" "while something below is dirty") 2>&1 >/dev/null ); src=$?
+check "a decline is refused while a repository below is dirty" 2 "$src"
+contains "and says what to do first" "register it as a submodule" "$serr"
+
+# Clean is no comfort either. Its contents are outside the identity whatever
+# their state, so a marker written now would answer for code written inside it
+# tomorrow - which is why run-review.sh refuses every one of these, not just
+# the dirty ones.
+git -C "$deep" add -A
+git -C "$deep" commit -qm "settle it"
+edit "an outer change, with a clean repository below"
+serr=$( (cd "$repo" && "$skip" "with a clean one below") 2>&1 >/dev/null ); src=$?
+check "a decline is refused even when it is clean" 2 "$src"
+contains "and says why a clean one still counts" "made inside it later" "$serr"
+rm -rf "$repo/vendor"
+git -C "$repo" rm -q -r --cached vendor 2>/dev/null
+git -C "$repo" commit -qm "drop inner" >/dev/null 2>&1
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

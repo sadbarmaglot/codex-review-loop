@@ -81,6 +81,40 @@ The hook holds nothing open and runs nothing itself. After
 `REVIEW_LOOP_MAX_ROUNDS` unanswered asks it releases the turn with a notice
 rather than trapping you.
 
+## When the gate stays quiet
+
+Measured over one four-day session of mostly document work: the gate refused
+148 times and ten reviews were started, once refusing 33 turns in a row. It
+identifies a state by comparing the working tree with HEAD, which cannot tell a
+turn that changed nothing from a turn that changed everything.
+
+**A decline is remembered.**
+
+```
+/review-loop:skip "belongs to another piece of work"
+```
+
+The gate stops asking about that exact state until the tree changes. Use it for
+what a hook cannot know: a turn that only read, a day spent on documents, work
+that was already uncommitted when the session started, someone else's change.
+The reason goes to `decisions.log`, and the marker outlives the usual sweep, as
+the journal does.
+
+This is deliberately the only way the gate goes quiet on a change that exists.
+There was a second: a shortcut that released any turn whose changed files all
+looked documentary. Five review rounds found its list wrong in a new way each
+time — `.txt`, whole directories, `.mdx`, file modes, this plugin's own
+`commands/` and `skills/`, then Copilot's instruction files — and the next one
+was always waiting. Deciding what a file means is not something a hook can do
+in milliseconds, and the session already knows.
+
+Declined is not reviewed, and the two cannot be confused: a different file, a
+different word in the trace, no completion marker, and a real review of the
+same state still files its own result. A decline is refused where a review
+would be — with a dirty submodule or an embedded repository below, whose
+contents are outside the state identity, so a marker written now would answer
+for code written inside it later.
+
 ## Checking a plan before writing it
 
 The gate guards the diff. Everything upstream of it — the sketch of what to
@@ -128,6 +162,7 @@ Environment variables, all optional:
 | `REVIEW_LOOP_KEEP_API_KEY` | unset | Opt back into API billing |
 | `REVIEW_LOOP_MAX_DIFF_BYTES` | `100000` | `codex-review.sh` only: diff truncated past this, to stay under Linux's ~128 KiB per-argument execve limit. `claude-review.sh` feeds its prompt on stdin and is not bound by it |
 | `REVIEW_LOOP_STATE_DIR` | `$XDG_STATE_HOME`, else `~/.cache` | Where state, results, the journal and `decisions.log` live, under `review-loop/` |
+| `REVIEW_LOOP_DOUBT_AFTER` | `5` | Reviews of one uncommitted change before the report arrives with a question for Claude to settle first — are the findings still worth the rounds, or would a different shape stop them coming. Counted per base revision, so a commit starts it over, and so work discarded and replaced without a commit inherits the count: the question then comes early, which for a prompt to stop and think is the harmless direction |
 | `REVIEW_LOOP_MAX_JOURNAL_BYTES` | `40000` | The journal is trimmed to its most recent rounds past this |
 | `REVIEW_LOOP_KEEP_LOGS_DAYS` | `1` | How long reviewer logs and patches of your source are kept |
 | `REVIEW_LOOP_KEEP_DAYS` | `7` | How long findings and completion markers are kept. The journal is never swept |

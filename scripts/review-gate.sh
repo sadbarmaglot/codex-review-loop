@@ -137,6 +137,34 @@ if [ -f "$results/$diff_hash.done" ]; then
   allow
 fi
 
+# Declined, which is not the same as reviewed and is deliberately a different
+# file. The session knows what a turn was about and this hook does not, so when
+# the mechanical rules below misjudge it, /review-loop:skip records the answer
+# for this state and the gate stops asking until the tree moves.
+if [ -f "$results/$diff_hash.skipped" ]; then
+  trace "allow: this state was declined by the author"
+  allow
+fi
+
+# There is no shortcut here for changes that look like documents, and there
+# was one: if every changed path ended in a documentary extension the turn was
+# released unreviewed. It is gone, and the reason is worth keeping. Five review
+# rounds all pushed in one direction - the list of what counts as harmless was
+# never complete. First .txt, because requirements.txt spells itself that way.
+# Then whole directories, because docs/conf.py builds the docs. Then .mdx,
+# which compiles to an application. Then file modes, because a symlink can be
+# called README.md. Then commands/, skills/ and AGENTS.md, which are this
+# plugin's own behaviour. Then Copilot's instruction files, with .cursorrules
+# and the rest waiting behind them.
+#
+# The shortcut was a guess about what a file means, made in a hook that must
+# answer in milliseconds, and every round found the guess wrong in a new way.
+# What it was built for - 148 refusals in four days of writing documents - is
+# answered by the decline above instead: one /review-loop:skip for that state
+# rather than a question at every stop. The judgement moves to the session,
+# which knows what the turn was about, and nothing mechanical has to pretend
+# it can tell prose from code by its name.
+
 # A review of this state is already running. Its own marker is what counts, not
 # the gate's memory of having asked: that memory lives in the turn's state and
 # resets with every new user message, so the gate used to demand a second review

@@ -108,7 +108,11 @@ embedded_repos() {
         *) continue ;;
       esac
       path=${entry#*$'\t'}
-      printf '%s\n' "$declared" | grep -qxF "$path" || printf '%s\n' "$path"
+      # NUL out as well as in. Printing these newline-separated undid the care
+      # taken reading them: a directory whose name contains a newline came back
+      # as two paths, each of which exists nowhere, so every caller checking
+      # them found nothing wrong and let the change through.
+      printf '%s\n' "$declared" | grep -qxF "$path" || printf '%s\0' "$path"
     done
   return 0
 }
@@ -145,7 +149,7 @@ tree_is_clean() {
   # one leaves the superproject tree identical. Checked here rather than later:
   # the clean shortcut used to return first, and such a change was silently
   # treated as nothing to review.
-  embedded_repos "$root" "$tree" | while IFS= read -r path; do
+  embedded_repos "$root" "$tree" | while IFS= read -r -d '' path; do
     [ -n "$path" ] || continue
     [ -n "$(git -C "$root/$path" status --porcelain 2>/dev/null)" ] && exit 1
   done || return 1
@@ -249,7 +253,12 @@ prune_results() {
   # reads to know a state was looked at.
   find "$dir" -maxdepth 1 -type f \( -name '*.err' -o -name '*.patch' \) \
     -mtime +"$logdays" -delete 2>/dev/null
-  find "$dir" -maxdepth 1 -type f ! -name 'journal-*' -mtime +"$days" -delete 2>/dev/null
+  # The journal and the declines are decisions, not results. A `.skipped`
+  # marker says the author answered the question for this exact state, and
+  # sweeping it on age makes the gate ask again about a tree that has not
+  # moved - which is the opposite of what the command promises.
+  find "$dir" -maxdepth 1 -type f ! -name 'journal-*' ! -name '*.skipped' \
+    -mtime +"$days" -delete 2>/dev/null
 
   # Markers are named <hash>.started.<pid>: one per invocation, so two runs of
   # one state do not share a file and neither can remove the other's.
