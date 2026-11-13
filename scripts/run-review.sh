@@ -27,6 +27,8 @@ here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$here/snapshot.sh"
 
 REVIEWER=${REVIEW_LOOP_REVIEWER:-$here/codex-worktree-review.sh}
+# A bare name is one of the plugin's own adapters: "fanout", "claude".
+REVIEWER=$(resolve_reviewer "$REVIEWER" "$here")
 
 # --after "<what I did with the last findings>"
 #

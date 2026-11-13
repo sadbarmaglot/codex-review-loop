@@ -16,20 +16,66 @@
 set -uo pipefail
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source=scripts/diff.sh
+. "$here/diff.sh"
 
 # Stderr reaches the background task's output file, where progress can be read.
 stage() { printf '[review-loop] %s\n' "$1" >&2; }
 
+# One reviewer named means N copies of it, as before. Several named means one
+# worker each, and the list decides the count, not REVIEW_LOOP_FANOUT. Two
+# models disagree about different things, where two runs of one model mostly
+# disagree about nothing.
+#
+#   REVIEW_LOOP_FANOUT_REVIEWER="codex-worktree:claude"
+#
+# Colon-separated, as PATH is. Splitting on whitespace broke every path with a
+# space in it, the default included, and left no way to quote one. A name
+# without a slash is one of the plugin's own adapters; a path is a path.
+#
+# Put the worktree adapter first: only the first worker is given the setup
+# command, and it is the only kind that can use one.
+reviewers=()
+named=()
+if [ -x "${REVIEW_LOOP_FANOUT_REVIEWER:-}" ] && [ ! -d "${REVIEW_LOOP_FANOUT_REVIEWER:-}" ]; then
+  # One path, whatever characters it holds: a value that is itself an
+  # executable is never parsed as a list.
+  named=("$REVIEW_LOOP_FANOUT_REVIEWER")
+else
+  IFS=: read -r -a named <<<"${REVIEW_LOOP_FANOUT_REVIEWER:-}"
+fi
+for inner in ${named[@]+"${named[@]}"}; do
+  # Blank entries are dropped, so "a::b" and a value of nothing but spaces
+  # mean what they look like rather than naming a reviewer called "".
+  # Trimmed, so "a : b" reads as it looks.
+  inner=${inner#"${inner%%[![:space:]]*}"}
+  inner=${inner%"${inner##*[![:space:]]}"}
+  [ -n "$inner" ] && reviewers+=("$(resolve_reviewer "$inner" "$here")")
+done
+[ "${#reviewers[@]}" -gt 0 ] || reviewers=("$here/codex-worktree-review.sh")
 n=${REVIEW_LOOP_FANOUT:-3}
-inner=${REVIEW_LOOP_FANOUT_REVIEWER:-$here/codex-worktree-review.sh}
+case $n in ''|*[!0-9]*|0) n=1 ;; esac
+if [ "${#reviewers[@]}" -gt 1 ]; then
+  n=${#reviewers[@]}
+else
+  for ((i = 1; i < n; i++)); do reviewers+=("${reviewers[0]}"); done
+fi
+
 diff_file=${1:-/dev/null}
 prev_report=${2:-}
 
-case $n in ''|*[!0-9]*|0) n=1 ;; esac
-[ -x "$inner" ] || {
-  echo "fan-out reviewer $inner is not executable" >&2
-  exit 1
-}
+for inner in "${reviewers[@]}"; do
+  # Itself as a worker inherits this list and fans out again, without end.
+  # By file, not by name, so a full path to this script is caught too.
+  [ "$inner" -ef "${BASH_SOURCE[0]}" ] && {
+    echo "the fan-out cannot be one of its own reviewers: $inner" >&2
+    exit 1
+  }
+  [ -x "$inner" ] || {
+    echo "fan-out reviewer $inner is not executable" >&2
+    exit 1
+  }
+done
 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/review-loop-fan.XXXXXX")
 # Cleanup on EXIT; the handlers exit, because a trapped signal replaces
@@ -68,6 +114,7 @@ stage "$n reviewers starting"
 # slowest part of the review. The others read the same snapshot without it.
 pids=()
 for i in $(seq 1 "$n"); do
+  inner=${reviewers[$((i - 1))]}
   if [ "$i" = 1 ]; then
     "$inner" "$diff_file" "$prev_report" >"$tmp/out.$i" 2>"$tmp/err.$i" &
   else
@@ -113,7 +160,10 @@ for i in "${ok[@]}"; do
   body=$(cat "$tmp/out.$i" 2>/dev/null)
   [ -z "${body//[$' \t\n\r']/}" ] && continue
   said_something=1
-  printf '### Reviewer %s of %s\n\n%s\n\n' "$i" "$n" "$body"
+  # Named, because with a mixed list who said it is part of the finding: two
+  # models agreeing is evidence that two runs of one model are not.
+  who=$(basename "${reviewers[$((i - 1))]}" .sh)
+  printf '### Reviewer %s of %s (%s)\n\n%s\n\n' "$i" "$n" "$who" "$body"
 done
 
 # Said before the silence check, not after. Silence from the survivors of a

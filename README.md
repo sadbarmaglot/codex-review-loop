@@ -151,7 +151,7 @@ Environment variables, all optional:
 | `REVIEW_LOOP_MAX_TEST_ROUNDS` | `3` | How many times the gate asks for that evidence |
 | `REVIEW_LOOP_LAUNCH_GRACE` | `120` | Seconds a request counts as a review starting before the gate asks again |
 | `REVIEW_LOOP_FANOUT` | `3` | Reviewers run at once by `fanout-review.sh` |
-| `REVIEW_LOOP_FANOUT_REVIEWER` | `scripts/codex-worktree-review.sh` | What the fan-out runs copies of |
+| `REVIEW_LOOP_FANOUT_REVIEWER` | `scripts/codex-worktree-review.sh` | What the fan-out runs. One adapter means `REVIEW_LOOP_FANOUT` copies of it; several, separated by colons as in `PATH`, means one worker each and the list sets the count. A value that is itself an executable is always one reviewer, so a single path may hold a colon; inside a list it may not |
 | `REVIEW_LOOP_SETUP_CMD` | unset | Worktree adapter only: how to install dependencies in the throwaway checkout |
 | `REVIEW_LOOP_CODEX_SCOPE` | `--uncommitted` | Built-in adapter only: `--base <branch>` or `--commit <sha>` instead |
 | `REVIEW_LOOP_CODEX_FLAGS` | `-c model_reasoning_effort="medium"` | Flags passed to the Codex CLI. Without it a review inherits the effort from `~/.codex/config.toml`, which is chosen for writing code, not reviewing it — `high` there turned two-minute reviews into eight-minute ones. Not read by `plan-review.sh`: that one reviews in your own checkout, so its sandbox is part of the command rather than a default to override |
@@ -206,6 +206,27 @@ the tests: the suite is deterministic, and running it N times buys the same
 answer at N times the cost of the slowest step. The others are told plainly to
 leave the tests alone — merely withholding the dependencies is not enough, as a
 reviewer that tries anyway reports the resulting failures as findings.
+
+Copies of one reviewer cure its inconsistency and nothing else: they share its
+blind spots. Naming two different adapters puts two models on the same change,
+
+```
+REVIEW_LOOP_REVIEWER=fanout
+REVIEW_LOOP_FANOUT_REVIEWER=codex-worktree:claude
+```
+
+The plugin's own adapters go by short names — `codex-worktree`, `codex`,
+`codex-builtin`, `claude`, `fanout` — so settings do not carry the install
+path, which holds the version and stops existing at every update. Anything
+else is taken as a path to your own reviewer.
+
+and each report is headed with who wrote it, since two models agreeing is
+evidence that two runs of one are not. Put the worktree adapter first — only
+the first worker gets the setup command, and it is the only kind that can use
+it. Worth knowing what the second opinion is: `claude -p` reviewing code Claude
+wrote is a fresh session with none of the author's context, but it is the same
+family of model, so it is a weaker check on the author than Codex is and a
+useful check on Codex.
 
 ### Reviewer contract
 

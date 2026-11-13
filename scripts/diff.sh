@@ -274,3 +274,16 @@ prune_results() {
   done
   return 0
 }
+
+# resolve_reviewer <name-or-path> <scripts-dir>
+#
+# Short names for the plugin's own adapters, so settings need not carry the
+# install path, which holds the version. A closed list: matching any
+# *-review.sh let "skip" run skip-review.sh as a reviewer and file a decline
+# as a review. Paths and unknown names are returned unchanged.
+resolve_reviewer() {
+  case $1 in
+    codex-worktree|codex|codex-builtin|claude|fanout) printf '%s' "$2/$1-review.sh" ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
