@@ -242,8 +242,75 @@ Error: Claude Code cannot be launched inside another Claude Code session.
 Nested sessions share runtime resources and will crash all active sessions.
 ```
 
-`scripts/claude-review.sh` unsets the variable, which is the only way to review
-from inside a hook, but the warning is the CLI's own and has not been tested
-against a live outer session. A separate binary has no such conflict. Treat the
-Claude adapter as the option for reviewing outside a session (CI, a manual
-pass), and install Codex for the in-session loop.
+`scripts/claude-review.sh` unsets the variable, which is the only way to start
+it from inside a session. It has since run that way: five mixed fan-out rounds
+launched as background tasks from a live session, each with a `claude -p`
+worker beside a Codex one, and the outer session was unaffected. Codex stays
+the default because it is a different model; Claude is the second opinion.
+
+## Two models on one change
+
+The fan-out can run different adapters side by side
+(`REVIEW_LOOP_FANOUT_REVIEWER=codex-worktree:claude`). Over the five rounds
+that reviewed that feature itself, the two models found the same defect twice
+— whitespace as a list separator, and the fan-out naming itself as a worker —
+and each found defects the other missed: Claude the blank list and the
+untrimmed entries, Codex the short-name lookup that let `skip` pass for a
+reviewer and the colon in a single path. Agreement between them was a stronger
+signal than agreement between copies of one, and neither produced a finding
+that was wrong.
+
+## Decisions the code no longer explains
+
+The scripts once carried their history in comments. It lives here now.
+
+**No shortcut for changes that look like documents.** The gate once released a
+turn whose changed files all had documentary extensions. Five review rounds
+each found the allow-list wrong in a new way: `.txt` is how `requirements.txt`
+spells itself; `docs/conf.py` builds the docs; `.mdx` compiles to an
+application; a symlink can be called `README.md`; `commands/`, `skills/` and
+`AGENTS.md` are behaviour; then Copilot's instruction files. Deciding what a
+file means is not something a hook can do in milliseconds. `/review-loop:skip`
+covers the case instead, with the judgement in the session.
+
+**State is a tree, not diff text.** A tree can be compared with a snapshot's
+tree directly, which is how a review proves it looked at the state it is filed
+under. Repository and base revision are part of the identity, because one
+results directory serves every project.
+
+**Dirty submodules and embedded repositories are refused.** `git add -A`
+records both as gitlinks. A registered submodule is still accounted for: its
+content tree goes into the state identity, so a clean one is reviewed like
+anything else. A dirty one is refused, because its uncommitted edits are in no
+snapshot and the review would come back clean about code it never saw. An
+embedded repository nobody declared is refused whether dirty or not: its
+contents are outside the identity altogether, so a review or a decline would
+outlive edits made inside. Submodule state is read once and used for both the
+identity and the decision; two readings left a window. Paths are NUL-delimited
+end to end.
+
+**Signals.** A trapped signal replaces bash's default, so handlers exit. Bash
+also defers a trap while waiting on a foreground child, so reviewers run
+through `run_killable` and handlers kill the process tree. Processes are
+killed by pid, never by name: a `pkill -f run-review.sh` in a test once killed
+live reviews in another session for hours.
+
+**One marker, one file per invocation.** Start markers, reviewer output and
+context files carry the pid. Shared paths let one session truncate or delete
+another's, and a marker is trusted only while its owner is alive and older
+than the marker.
+
+**The plan check is deliberately plain.** It does not read
+`REVIEW_LOOP_CODEX_FLAGS`, because guarding every spelling of `--sandbox` was
+longer than the adapter. It has no process handling, because it holds no
+worktree and lasts a minute or two. That makes `</dev/null` load-bearing:
+nothing else closes stdin for a foreground child.
+
+**History is handed over as background.** `codex review` takes no prompt
+beside a scope flag, so the journal goes in through `AGENTS.md`. Worded as an
+instruction to verify fixes, it made the reviewer re-run the test suite once
+per claim; worded as background, it does not.
+
+**Retention.** Reviewer logs and patches were two thirds of the results
+directory, so they go after a day; findings and markers after a week; the
+journal and the declines never, because they are decisions.

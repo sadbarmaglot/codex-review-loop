@@ -2,26 +2,13 @@
 #
 # Stop hook: do not let a turn end on a change nobody has looked at.
 #
-# The gate reviews nothing and waits for nothing. It asks one question - does
-# this exact state have a review - and if the answer is no it refuses to end the
-# turn until Claude starts one as a background task. Claude Code tracks that
-# task and wakes the session with its output when it finishes, so the findings
-# arrive in full, in the conversation, while the hook holds nothing open.
-#
-# That is the whole design, and it is small because the runtime owns the hard
-# parts. An earlier version ran reviews itself: detaching them, keeping them out
-# of the hook's process group, tracking pids, cancelling superseded ones,
-# guarding against reused pids. All of it existed to reimplement, worse, what
-# background tasks already do.
-#
-# Every failure path lets the turn end. A review tool that can trap you in a
-# turn is worse than no review tool.
+# It reviews nothing itself. If this exact state has no review, it refuses the
+# stop and names the command for Claude to run as a background task. Every
+# failure path lets the turn end.
 
 set -uo pipefail
 
-# The state directory holds patches of your source. On a machine where $TMPDIR
-# is the shared /tmp, the default umask would leave them readable by every
-# local account.
+# The state directory holds patches of the user's source.
 umask 077
 
 MAX_ROUNDS=${REVIEW_LOOP_MAX_ROUNDS:-3}
@@ -56,9 +43,7 @@ cwd=$(field cwd)
 if [ -n "$cwd" ]; then cd "$cwd" || allow; fi
 repo_root=$(git rev-parse --show-toplevel 2>/dev/null) || repo_root=""
 if [ -z "$repo_root" ]; then
-  # A session opened above its repositories edits files in the children, and
-  # this used to be an unconditional, silent allow - indistinguishable from a
-  # clean tree that had been reviewed. Say so when there is something below.
+  # A session rooted above its repositories: say so if any below are dirty.
   dirty_below=$(find "${cwd:-.}" -maxdepth 3 -name .git -maxdepth 3 2>/dev/null |
     while read -r d; do
       r=$(dirname "$d")
@@ -72,25 +57,14 @@ fi
 state_dir=$(state_root)
 results=$state_dir/results
 mkdir -p "$results" || allow
-# Keyed by session and repository both. Round budgets and the pending hash
-# belong to one repository: a session that moves between two used to carry
-# A's exhausted budget into B, and B's first stop was then released without
-# ever being asked about.
+# Per session and repository: budgets must not cross between repositories.
 state=$state_dir/${session:-nosession}-$(repo_key "$repo_root").state
 
-# Only the hook is told where the session transcript lives, and the review is
-# started by Claude, not by the hook. Leave the path where the review can find
-# it; whether any of it is ever sent anywhere is a separate, opt-in decision.
-# Keyed by repository. One file for the whole machine meant the last session to
-# end a turn anywhere left its pointer for everyone: a project that had opted
-# in to sharing its conversation could pick up, and send, the conversation of a
-# project that had not.
+# Left where the review can find it, keyed by repository. Sharing is opt-in.
 transcript=$(field transcript_path)
 [ -n "$transcript" ] &&
   printf '%s' "$transcript" >"$state_dir/transcript-$(repo_key "$repo_root").path"
 
-# The working tree as a tree object, which is both what identifies this state
-# and what a snapshot can later be checked against.
 base=$(base_rev "$repo_root") || allow
 tree=$(work_tree_sha "$repo_root" "$state_dir/index-$$") || allow
 rm -f "$state_dir/index-$$"
@@ -101,7 +75,7 @@ diff_hash=$(state_identity "$repo_root" "$tree" "$base")
 
 # --- state --------------------------------------------------------------------
 
-# Four lines: prompt_id, reviews asked for, test blocks spent, hash last asked.
+# Five lines: prompt_id, reviews asked, test asks, hash last asked, when.
 rounds=0 test_rounds=0 last_prompt="" asked_hash="" asked_at=0
 if [ -f "$state" ]; then
   { read -r last_prompt; read -r rounds; read -r test_rounds; read -r asked_hash; read -r asked_at; } <"$state" || true
@@ -114,15 +88,14 @@ save_state() { # save_state <rounds> <test_rounds> <asked_hash>
   printf '%s\n%s\n%s\n%s\n%s\n' "$prompt_id" "$1" "$2" "$3" "$(date +%s)" >"$state"
 }
 
-# The gate decides invisibly, inside a hook. Without a line per invocation a
-# surprising decision is unreconstructable after the fact.
+# One line per decision, so a surprising one can be reconstructed.
 trace() {
   printf '%s prompt=%s rounds=%s/%s tests=%s hash=%.12s %s\n' \
     "$(date -u +%H:%M:%S)" "$prompt_id" "$rounds" "$MAX_ROUNDS" "$test_rounds" \
     "$diff_hash" "$1" >>"$state_dir/decisions.log"
 }
 
-# The budgets are per user turn, not per session.
+# Budgets are per user turn.
 if [ "$last_prompt" != "$prompt_id" ]; then
   rounds=0
   test_rounds=0
@@ -137,42 +110,16 @@ if [ -f "$results/$diff_hash.done" ]; then
   allow
 fi
 
-# Declined, which is not the same as reviewed and is deliberately a different
-# file. The session knows what a turn was about and this hook does not, so when
-# the mechanical rules below misjudge it, /review-loop:skip records the answer
-# for this state and the gate stops asking until the tree moves.
+# Declined with /review-loop:skip: a different file, not a review.
 if [ -f "$results/$diff_hash.skipped" ]; then
   trace "allow: this state was declined by the author"
   allow
 fi
 
-# There is no shortcut here for changes that look like documents, and there
-# was one: if every changed path ended in a documentary extension the turn was
-# released unreviewed. It is gone, and the reason is worth keeping. Five review
-# rounds all pushed in one direction - the list of what counts as harmless was
-# never complete. First .txt, because requirements.txt spells itself that way.
-# Then whole directories, because docs/conf.py builds the docs. Then .mdx,
-# which compiles to an application. Then file modes, because a symlink can be
-# called README.md. Then commands/, skills/ and AGENTS.md, which are this
-# plugin's own behaviour. Then Copilot's instruction files, with .cursorrules
-# and the rest waiting behind them.
-#
-# The shortcut was a guess about what a file means, made in a hook that must
-# answer in milliseconds, and every round found the guess wrong in a new way.
-# What it was built for - 148 refusals in four days of writing documents - is
-# answered by the decline above instead: one /review-loop:skip for that state
-# rather than a question at every stop. The judgement moves to the session,
-# which knows what the turn was about, and nothing mechanical has to pretend
-# it can tell prose from code by its name.
+# No shortcut for changes that look like documents: it was tried and removed,
+# see docs/design.md. The decline above covers that case.
 
-# A review of this state is already running. Its own marker is what counts, not
-# the gate's memory of having asked: that memory lives in the turn's state and
-# resets with every new user message, so the gate used to demand a second review
-# of a state the first one was still working on.
-# Any invocation still working on this state. Each writes its own marker, and
-# a marker is believed only while its owner is alive: killed with SIGKILL, or
-# gone with the machine, a run leaves one behind that no trap will clear, and
-# the gate used to honour it for half an hour on the strength of its timestamp.
+# A review of this state is running: its marker counts while its owner lives.
 in_flight=""
 for marker in "$results/$diff_hash".started.*; do
   [ -e "$marker" ] || continue
@@ -191,10 +138,7 @@ if [ -n "$in_flight" ]; then
   allow
 fi
 
-# Asked moments ago, before the task had a chance to write its marker. Only
-# moments: an ask that produced no running review is not a review, and treating
-# it as one meant the round budget never bought a second ask for a state that
-# had not moved.
+# Asked moments ago, before the task could write its marker.
 if [ "$asked_hash" = "$diff_hash" ] &&
   [ $(( $(date +%s) - asked_at )) -lt "${REVIEW_LOOP_LAUNCH_GRACE:-120}" ]; then
   trace "allow: review requested moments ago, still starting"
@@ -209,11 +153,8 @@ fi
 
 # --- tests first, run by Claude ------------------------------------------------
 
-# Opt-in, because the gate has no business guessing a project's test command:
-# one repository here splits Poetry and uv across services. Claude knows the
-# command - it is in the project's own instructions - so Claude runs it and
-# leaves the outcome. Self-reported evidence is not proof; it is a tool for
-# yourself, not a defence against yourself.
+# Opt-in: the gate does not guess a project's test command. Claude runs it and
+# leaves the outcome in a file.
 if [ -n "${REVIEW_LOOP_REQUIRE_TESTS:-}" ]; then
   evidence=$state_dir/tests-$diff_hash.txt
   verdict=""
@@ -222,9 +163,7 @@ if [ -n "${REVIEW_LOOP_REQUIRE_TESTS:-}" ]; then
   case $verdict in
     PASS*) : ;;
     *)
-      # Its own budget, so a stubborn suite cannot eat the review rounds. It
-      # gives up only when usable evidence is still missing: reading the file
-      # first means evidence that arrived on the last ask still counts.
+      # Its own budget, checked after reading the evidence.
       if [ "$test_rounds" -ge "$MAX_TEST_ROUNDS" ]; then
         save_state "$rounds" "$test_rounds" "$asked_hash"
         trace "allow: test evidence never arrived"
@@ -264,19 +203,8 @@ trace "block: asking for a background review"
 {
   echo "This change has not been reviewed. Start the review now, then finish."
   echo
-  # Named in the command when sharing is on, because only this invocation knows
-  # which session it belongs to. The file beside the results is keyed by
-  # repository and serves manual runs, but two sessions in one repository
-  # overwrite it, and the review would then carry the wrong conversation.
-  # Quoted, because neither path is ours to choose: a space in a home
-  # directory or a project name splits the command, and a metacharacter in one
-  # would be interpreted rather than passed. printf %q leaves an ordinary path
-  # untouched, so the common case stays readable.
-  # --after is named whenever a history exists, because nothing else names it.
-  # A session that does not know to write it leaves the journal holding the
-  # reviewer's half of the conversation and none of the author's, and the
-  # reviewer goes back to raising what has already been declined. The history
-  # outlives the session; the knowledge of how to add to it did not.
+  # The transcript is named in the command when sharing is on, and --after
+  # whenever a journal exists. Paths are quoted with %q.
   after_hint=""
   [ -s "$results/journal-$(repo_key "$repo_root").md" ] &&
     after_hint=' --after "what you did with the last findings: fixed, or declined and why"'

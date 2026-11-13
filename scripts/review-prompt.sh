@@ -7,19 +7,12 @@
 
 build_prompt() {
   local diff_file=$1 prev_report=${2:-}
-  # Under Linux's per-argument execve limit, which is about 128 KiB: the whole
-  # prompt is passed as one argument, and a larger diff fails with E2BIG before
-  # the reviewer starts. macOS caps the total instead, so this never showed up
-  # here. Raising it means piping the prompt in on stdin instead, which the
-  # adapters deliberately keep closed - a CLI waiting on an open stdin hangs.
+  # The prompt is one argument, and Linux caps an argument at about 128 KiB;
+  # diff and history share it. Zero means no cap, for adapters using stdin.
   local max_bytes=${REVIEW_LOOP_MAX_DIFF_BYTES:-100000}
-  # The history shares the argument with the diff, so capping only the diff
-  # still lets the pair cross the limit and fail with E2BIG.
   local max_prev=${REVIEW_LOOP_MAX_PREV_BYTES:-20000}
   local diff_text size
 
-  # Zero means no cap: an adapter that feeds the prompt on stdin is not bound
-  # by the per-argument limit the cap exists for.
   if [ "$max_bytes" = 0 ]; then
     diff_text=$(cat "$diff_file")
     size=0
