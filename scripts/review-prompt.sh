@@ -43,6 +43,14 @@ No preamble, no summary, no praise, no restating the diff.
 EOF
 
   if [ -n "$prev_report" ] && [ -f "$prev_report" ]; then
+    # No cap for adapters on stdin: capped, the tail kept only the end of the
+    # conversation and cut the journal off whole.
+    local history
+    if [ "$max_bytes" = 0 ]; then
+      history=$(cat "$prev_report")
+    else
+      history=$(tail -c "$max_prev" "$prev_report")
+    fi
     cat <<EOF
 
 Earlier rounds on this repository, and the author's answer to each, are below.
@@ -54,7 +62,7 @@ word. Where the author declined one and gave a reason, do not raise it again
 unless the reason is wrong - and then say why it is wrong.
 
 --- history ---
-$(tail -c "$max_prev" "$prev_report")
+$history
 --- end history ---
 EOF
   fi

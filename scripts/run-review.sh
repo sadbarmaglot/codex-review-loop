@@ -176,9 +176,10 @@ if [ -n "${REVIEW_LOOP_SHARE_TRANSCRIPT:-}" ]; then
     # Per invocation, so two sessions cannot overwrite each other's context.
     context=$results/context-$hash-$$.md
     temp_context=$context
-    [ -s "$journal" ] && cat "$journal" >"$context" || : >"$context"
+    # Conversation first, journal last: an adapter that keeps only the tail
+    # must lose old talk, not the author's decisions.
     {
-      printf '\n\n## The conversation that produced this change\n\n'
+      printf '## The conversation that produced this change\n\n'
       jq -r '
         select(.type=="user" or .type=="assistant")
         | .type as $role
@@ -187,7 +188,9 @@ if [ -n "${REVIEW_LOOP_SHARE_TRANSCRIPT:-}" ]; then
         | select(. != null and . != "")
         | "### \($role)\n\(.)"' "$t" 2>/dev/null |
         tail -c "${REVIEW_LOOP_MAX_TRANSCRIPT_BYTES:-60000}"
-    } >>"$context"
+      printf '\n\n## Review rounds so far, and the author on each\n\n'
+    } >"$context"
+    [ -s "$journal" ] && cat "$journal" >>"$context"
   fi
 fi
 

@@ -166,7 +166,7 @@ Environment variables, all optional:
 | `REVIEW_LOOP_MAX_JOURNAL_BYTES` | `40000` | The journal is trimmed to its most recent rounds past this |
 | `REVIEW_LOOP_KEEP_LOGS_DAYS` | `1` | How long reviewer logs and patches of your source are kept |
 | `REVIEW_LOOP_KEEP_DAYS` | `7` | How long findings and completion markers are kept. The journal is never swept |
-| `REVIEW_LOOP_MAX_PREV_BYTES` | `20000` | Prompt-driven adapters only: how much history shares the argument with the diff |
+| `REVIEW_LOOP_MAX_PREV_BYTES` | `20000` | `codex-review.sh` only: how much history shares the argument with the diff, counted from the end. The journal is placed after the conversation, so the cut takes old talk before decisions. `claude-review.sh` reads its prompt on stdin and gets the history whole |
 
 `REVIEW_LOOP_SETUP_CMD` is per project — a value that fails aborts the review,
 so a global one would break every other repository. Put it in that repository's

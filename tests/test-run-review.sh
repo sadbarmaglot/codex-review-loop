@@ -189,6 +189,26 @@ case $handed in
   *) pass=$((pass + 1)); printf 'ok   %s\n' "but not the tool output, which is 97% of the file" ;;
 esac
 
+# --- the author's note outlives a reviewer that keeps only the tail ----------
+# The context used to be journal first, conversation last, and a prompt-driven
+# adapter keeps the last 20 KB: with sharing on, the Claude reviewer got the
+# end of the talk and none of the journal, the --after note included.
+echo "ordering check" >>"$repo/src/a.py"
+(cd "$repo" && REVIEW_LOOP_SHARE_TRANSCRIPT=1 REVIEW_LOOP_TRANSCRIPT="$fake_transcript" \
+  "$runner" --after "DECIDED: declined the second finding" >/dev/null 2>&1)
+handed=$(cat "$FAKE_PREV_DUMP" 2>/dev/null)
+contains "the journal comes after the conversation" "DECIDED: declined" "${handed##*"### assistant"}"
+
+# And an adapter on stdin has no cap to apply at all.
+( . "$root/scripts/review-prompt.sh"
+  hist=$work/long-history.md
+  { echo "EARLY-DECISION"; head -c 30000 /dev/zero | tr '\0' 'x'; echo; echo "LATE"; } >"$hist"
+  : >"$work/empty.patch"
+  REVIEW_LOOP_MAX_DIFF_BYTES=0 build_prompt "$work/empty.patch" "$hist" >"$work/prompt-stdin.txt"
+  build_prompt "$work/empty.patch" "$hist" >"$work/prompt-argv.txt" )
+check "a stdin adapter is handed the whole history" 1 "$(grep -c 'EARLY-DECISION' "$work/prompt-stdin.txt")"
+check "an argv adapter still keeps only the tail" 0 "$(grep -c 'EARLY-DECISION' "$work/prompt-argv.txt")"
+
 # --- an interrupted review must not look like a running one ------------------
 # Several reviews were cancelled tonight, and each used to leave its marker
 # behind: the gate then treated a review that no longer existed as in flight
